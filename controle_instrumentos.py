@@ -1,12 +1,8 @@
-<<<<<<< HEAD
 import sqlite3
 from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox
-import pandas as pd
 import os
-import subprocess
-import sys
 
 # =========================
 # CAMINHOS
@@ -34,6 +30,8 @@ def inicializar_banco():
     c.execute("""
         CREATE TABLE IF NOT EXISTS instrumentos (
             id_instrumento TEXT PRIMARY KEY,
+            nome TEXT,
+            familia TEXT,
             status TEXT
         )
     """)
@@ -52,434 +50,232 @@ def inicializar_banco():
     conn.commit()
     conn.close()
 
-def seed():
-    conn = conectar()
-    c = conn.cursor()
-
-    instrumentos = [
-        "7.03.00164-N01",
-        "7.03.00164-N02",
-        "7.03.00164-N04",
-        "7.03.00164-N05",
-    ]
-
-    for i in instrumentos:
-        c.execute(
-            "INSERT OR IGNORE INTO instrumentos VALUES (?, 'DISPONIVEL')", (i,)
-        )
-
-    funcionarios = [
-        ("001803", "Felipe Ramos"),
-        ("001641", "Marcelo Marques"),
-    ]
-
-    for f in funcionarios:
-        c.execute(
-            "INSERT OR IGNORE INTO funcionarios VALUES (?, ?)", f
-        )
-
-    conn.commit()
-    conn.close()
-
 # =========================
-# EXCEL DINÂMICO
-# =========================
-def formatar_data(d):
-    if not d:
-        return ""
-    return datetime.strptime(d, "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
-
-def exportar_excel():
-    conn = conectar()
-
-    df_mov = pd.read_sql_query("""
-        SELECT 
-            f.nome AS Nome,
-            m.id_funcionario AS Cracha,
-            m.id_instrumento AS Instrumento,
-            m.data_saida AS "Data Saída",
-            m.data_devolucao AS "Data Devolução",
-            m.status AS Status
-        FROM movimentacoes m
-        LEFT JOIN funcionarios f ON f.id_funcionario = m.id_funcionario
-    """, conn)
-
-    df_mov["Data Saída"] = df_mov["Data Saída"].apply(formatar_data)
-    df_mov["Data Devolução"] = df_mov["Data Devolução"].apply(formatar_data)
-
-    df_inst = pd.read_sql_query("""
-        SELECT id_instrumento AS Instrumento, status AS Status
-        FROM instrumentos
-    """, conn)
-
-    conn.close()
-
-    agora = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    nome_excel = f"controle_instrumentos_{agora}.xlsx"
-    caminho_excel = os.path.join(BASE_DIR, nome_excel)
-
-    with pd.ExcelWriter(caminho_excel, engine="openpyxl") as writer:
-        df_mov.to_excel(writer, sheet_name="Movimentacoes", index=False)
-        df_inst.to_excel(writer, sheet_name="Instrumentos", index=False)
-
-    # Abrir automaticamente
-    if sys.platform.startswith("win"):
-        os.startfile(caminho_excel)
-    elif sys.platform.startswith("linux"):
-        subprocess.call(["xdg-open", caminho_excel])
-    else:
-        subprocess.call(["open", caminho_excel])
-
-    messagebox.showinfo("Excel", "Planilha gerada com sucesso!")
-
-# =========================
-# LÓGICA
+# FUNÇÕES AUXILIARES
 # =========================
 def agora():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def processar_bip(func, inst):
+instrumento_atual = None
+acao_atual = None
+nome_instrumento = None
+funcionario_retirou = None
+nome_funcionario_retirou = None
+
+def buscar_instrumento(codigo):
     conn = conectar()
     c = conn.cursor()
-
-    c.execute("SELECT status FROM instrumentos WHERE id_instrumento=?", (inst,))
+    c.execute("""
+        SELECT nome, status 
+        FROM instrumentos 
+        WHERE id_instrumento=?
+    """, (codigo,))
     r = c.fetchone()
-
-    if not r:
-        conn.close()
-        return "❌ Instrumento não cadastrado"
-
-    if r[0] == "DISPONIVEL":
-        c.execute("""
-            INSERT INTO movimentacoes
-            (id_funcionario, id_instrumento, data_saida, status)
-            VALUES (?, ?, ?, 'EM USO')
-        """, (func, inst, agora()))
-
-        c.execute("""
-            UPDATE instrumentos SET status='EM USO'
-            WHERE id_instrumento=?
-        """, (inst,))
-
-        conn.commit()
-        conn.close()
-        return "✅ Instrumento RETIRADO"
-
-    c.execute("""
-        SELECT id FROM movimentacoes
-        WHERE id_instrumento=? AND status='EM USO'
-        ORDER BY id DESC LIMIT 1
-    """, (inst,))
-    mov = c.fetchone()
-
-    if mov:
-        c.execute("""
-            UPDATE movimentacoes
-            SET data_devolucao=?, status='DEVOLVIDO'
-            WHERE id=?
-        """, (agora(), mov[0]))
-
-        c.execute("""
-            UPDATE instrumentos SET status='DISPONIVEL'
-            WHERE id_instrumento=?
-        """, (inst,))
-
-        conn.commit()
-        conn.close()
-        return "🔁 Instrumento DEVOLVIDO"
-
     conn.close()
-    return "⚠️ Erro"
+    return r
 
-# =========================
-# UI
-# =========================
-def bipar(event=None):
-    f = entry_func.get().strip()
-    i = entry_inst.get().strip().upper()
-
-    if not f or not i:
-        return
-
-    lbl_status.config(text=processar_bip(f, i))
-    entry_func.delete(0, tk.END)
-    entry_inst.delete(0, tk.END)
-    entry_func.focus()
-
-# =========================
-# START
-# =========================
-inicializar_banco()
-seed()
-
-janela = tk.Tk()
-janela.title("Controle de Instrumentos - CQ")
-janela.geometry("420x280")
-janela.resizable(False, False)
-
-tk.Label(janela, text="Bipe o CRACHÁ").pack(pady=5)
-entry_func = tk.Entry(janela, font=("Arial", 12))
-entry_func.pack()
-
-tk.Label(janela, text="Bipe o INSTRUMENTO").pack(pady=5)
-entry_inst = tk.Entry(janela, font=("Arial", 12))
-entry_inst.pack()
-entry_inst.bind("<Return>", bipar)
-
-lbl_status = tk.Label(janela, text="", font=("Arial", 10))
-lbl_status.pack(pady=10)
-
-tk.Button(
-    janela,
-    text="Exportar para Excel",
-    bg="#1f6aa5",
-    fg="white",
-    font=("Arial", 11),
-    command=exportar_excel
-).pack(pady=5)
-
-entry_func.focus()
-janela.mainloop()
-=======
-import sqlite3
-from datetime import datetime
-import tkinter as tk
-from tkinter import messagebox
-import pandas as pd
-import os
-import subprocess
-import sys
-
-# =========================
-# CAMINHOS
-# =========================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "controle_instrumentos.db")
-
-# =========================
-# BANCO
-# =========================
-def conectar():
-    return sqlite3.connect(DB_PATH)
-
-def inicializar_banco():
+def buscar_funcionario(cracha):
     conn = conectar()
     c = conn.cursor()
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS funcionarios (
-            id_funcionario TEXT PRIMARY KEY,
-            nome TEXT
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS instrumentos (
-            id_instrumento TEXT PRIMARY KEY,
-            status TEXT
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS movimentacoes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_funcionario TEXT,
-            id_instrumento TEXT,
-            data_saida TEXT,
-            data_devolucao TEXT,
-            status TEXT
-        )
-    """)
-
-    conn.commit()
+    c.execute("SELECT nome FROM funcionarios WHERE id_funcionario=?", (cracha,))
+    r = c.fetchone()
     conn.close()
+    return r
 
-def seed():
+def buscar_quem_esta_com_instrumento(codigo):
     conn = conectar()
     c = conn.cursor()
-
-    instrumentos = [
-        "7.03.00164-N01",
-        "7.03.00164-N02",
-        "7.03.00164-N04",
-        "7.03.00164-N05",
-    ]
-
-    for i in instrumentos:
-        c.execute(
-            "INSERT OR IGNORE INTO instrumentos VALUES (?, 'DISPONIVEL')", (i,)
-        )
-
-    funcionarios = [
-        ("001803", "Felipe Ramos"),
-        ("001641", "Marcelo Marques"),
-    ]
-
-    for f in funcionarios:
-        c.execute(
-            "INSERT OR IGNORE INTO funcionarios VALUES (?, ?)", f
-        )
-
-    conn.commit()
-    conn.close()
-
-# =========================
-# EXCEL DINÂMICO
-# =========================
-def formatar_data(d):
-    if not d:
-        return ""
-    return datetime.strptime(d, "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
-
-def exportar_excel():
-    conn = conectar()
-
-    df_mov = pd.read_sql_query("""
-        SELECT 
-            f.nome AS Nome,
-            m.id_funcionario AS Cracha,
-            m.id_instrumento AS Instrumento,
-            m.data_saida AS "Data Saída",
-            m.data_devolucao AS "Data Devolução",
-            m.status AS Status
+    c.execute("""
+        SELECT m.id_funcionario, f.nome
         FROM movimentacoes m
         LEFT JOIN funcionarios f ON f.id_funcionario = m.id_funcionario
-    """, conn)
-
-    df_mov["Data Saída"] = df_mov["Data Saída"].apply(formatar_data)
-    df_mov["Data Devolução"] = df_mov["Data Devolução"].apply(formatar_data)
-
-    df_inst = pd.read_sql_query("""
-        SELECT id_instrumento AS Instrumento, status AS Status
-        FROM instrumentos
-    """, conn)
-
+        WHERE m.id_instrumento=? AND m.status='EM USO'
+        ORDER BY m.id DESC LIMIT 1
+    """, (codigo,))
+    r = c.fetchone()
     conn.close()
+    return r
 
-    agora = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    nome_excel = f"controle_instrumentos_{agora}.xlsx"
-    caminho_excel = os.path.join(BASE_DIR, nome_excel)
+# =========================
+# FLUXO
+# =========================
+def bipar_instrumento(event=None):
+    global instrumento_atual, acao_atual
+    global nome_instrumento, funcionario_retirou, nome_funcionario_retirou
 
-    with pd.ExcelWriter(caminho_excel, engine="openpyxl") as writer:
-        df_mov.to_excel(writer, sheet_name="Movimentacoes", index=False)
-        df_inst.to_excel(writer, sheet_name="Instrumentos", index=False)
+    codigo = entry_inst.get().strip().upper()
+    if not codigo:
+        return
 
-    # Abrir automaticamente
-    if sys.platform.startswith("win"):
-        os.startfile(caminho_excel)
-    elif sys.platform.startswith("linux"):
-        subprocess.call(["xdg-open", caminho_excel])
+    dados = buscar_instrumento(codigo)
+
+    if not dados:
+        lbl_status.config(text="❌ Instrumento não cadastrado")
+        limpar_campos()
+        return
+
+    nome_instrumento, status = dados
+    instrumento_atual = codigo
+
+    if status == "DISPONIVEL":
+        acao_atual = "RETIRANDO"
+        lbl_status.config(
+            text=f"✅ {nome_instrumento} ({codigo})\n"
+                 "Status: DISPONÍVEL\n\n"
+                 "Bipe o crachá"
+        )
     else:
-        subprocess.call(["open", caminho_excel])
+        acao_atual = "DEVOLVENDO"
 
-    messagebox.showinfo("Excel", "Planilha gerada com sucesso!")
+        info = buscar_quem_esta_com_instrumento(codigo)
+        if not info:
+            lbl_status.config(text="⚠️ Erro de rastreabilidade")
+            limpar_campos()
+            return
 
-# =========================
-# LÓGICA
-# =========================
-def agora():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        funcionario_retirou = info[0]
+        nome_funcionario_retirou = info[1]
 
-def processar_bip(func, inst):
+        lbl_status.config(
+            text=f"🔒 {nome_instrumento} ({codigo})\n"
+                 "Status: EM USO\n\n"
+                 f"👤 Está com: {nome_funcionario_retirou}\n\n"
+                 "Bipe o crachá para devolver"
+        )
+
+    entry_func.focus()
+
+def bipar_funcionario(event=None):
+    global instrumento_atual, acao_atual
+    global nome_instrumento, funcionario_retirou, nome_funcionario_retirou
+
+    cracha = entry_func.get().strip()
+    if not cracha or not instrumento_atual:
+        return
+
+    func = buscar_funcionario(cracha)
+
+    if not func:
+        lbl_status.config(text="❌ Funcionário não cadastrado")
+        limpar_campos()
+        return
+
+    nome_func = func[0]
+
     conn = conectar()
     c = conn.cursor()
 
-    c.execute("SELECT status FROM instrumentos WHERE id_instrumento=?", (inst,))
-    r = c.fetchone()
+    # ================= RETIRADA =================
+    if acao_atual == "RETIRANDO":
 
-    if not r:
-        conn.close()
-        return "❌ Instrumento não cadastrado"
+        confirmar = messagebox.askokcancel(
+            "Confirmar",
+            f"{nome_func} está RETIRANDO\n"
+            f"{nome_instrumento} ({instrumento_atual}).\n\n"
+            "Confirma as informações?"
+        )
 
-    if r[0] == "DISPONIVEL":
+        if not confirmar:
+            conn.close()
+            limpar_campos()
+            return
+
         c.execute("""
             INSERT INTO movimentacoes
             (id_funcionario, id_instrumento, data_saida, status)
             VALUES (?, ?, ?, 'EM USO')
-        """, (func, inst, agora()))
+        """, (cracha, instrumento_atual, agora()))
 
         c.execute("""
             UPDATE instrumentos SET status='EM USO'
             WHERE id_instrumento=?
-        """, (inst,))
+        """, (instrumento_atual,))
 
-        conn.commit()
-        conn.close()
-        return "✅ Instrumento RETIRADO"
+        msg = "✅ Instrumento RETIRADO"
 
-    c.execute("""
-        SELECT id FROM movimentacoes
-        WHERE id_instrumento=? AND status='EM USO'
-        ORDER BY id DESC LIMIT 1
-    """, (inst,))
-    mov = c.fetchone()
+    # ================= DEVOLUÇÃO =================
+    else:
 
-    if mov:
+        if cracha != funcionario_retirou:
+            conn.close()
+            messagebox.showerror(
+                "Erro",
+                f"Este instrumento está com {nome_funcionario_retirou}.\n"
+                "Somente quem retirou pode devolver."
+            )
+            limpar_campos()
+            return
+
+        confirmar = messagebox.askokcancel(
+            "Confirmar",
+            f"{nome_func} está DEVOLVENDO\n"
+            f"{nome_instrumento} ({instrumento_atual}).\n\n"
+            "Confirma as informações?"
+        )
+
+        if not confirmar:
+            conn.close()
+            limpar_campos()
+            return
+
         c.execute("""
-            UPDATE movimentacoes
-            SET data_devolucao=?, status='DEVOLVIDO'
-            WHERE id=?
-        """, (agora(), mov[0]))
+            SELECT id FROM movimentacoes
+            WHERE id_instrumento=? AND status='EM USO'
+            ORDER BY id DESC LIMIT 1
+        """, (instrumento_atual,))
+        mov = c.fetchone()
+
+        if mov:
+            c.execute("""
+                UPDATE movimentacoes
+                SET data_devolucao=?, status='DEVOLVIDO'
+                WHERE id=?
+            """, (agora(), mov[0]))
 
         c.execute("""
             UPDATE instrumentos SET status='DISPONIVEL'
             WHERE id_instrumento=?
-        """, (inst,))
+        """, (instrumento_atual,))
 
-        conn.commit()
-        conn.close()
-        return "🔁 Instrumento DEVOLVIDO"
+        msg = "🔁 Instrumento DEVOLVIDO"
 
+    conn.commit()
     conn.close()
-    return "⚠️ Erro"
+
+    lbl_status.config(text=msg)
+    limpar_campos()
+
+def limpar_campos():
+    global instrumento_atual, funcionario_retirou, nome_funcionario_retirou
+    entry_inst.delete(0, tk.END)
+    entry_func.delete(0, tk.END)
+    instrumento_atual = None
+    funcionario_retirou = None
+    nome_funcionario_retirou = None
+    entry_inst.focus()
 
 # =========================
 # UI
 # =========================
-def bipar(event=None):
-    f = entry_func.get().strip()
-    i = entry_inst.get().strip().upper()
-
-    if not f or not i:
-        return
-
-    lbl_status.config(text=processar_bip(f, i))
-    entry_func.delete(0, tk.END)
-    entry_inst.delete(0, tk.END)
-    entry_func.focus()
-
-# =========================
-# START
-# =========================
 inicializar_banco()
-seed()
 
 janela = tk.Tk()
-janela.title("Controle de Instrumentos - CQ")
-janela.geometry("420x280")
+janela.title("Controle de Instrumentos - Funcionário")
+janela.geometry("480x340")
 janela.resizable(False, False)
-
-tk.Label(janela, text="Bipe o CRACHÁ").pack(pady=5)
-entry_func = tk.Entry(janela, font=("Arial", 12))
-entry_func.pack()
 
 tk.Label(janela, text="Bipe o INSTRUMENTO").pack(pady=5)
 entry_inst = tk.Entry(janela, font=("Arial", 12))
 entry_inst.pack()
-entry_inst.bind("<Return>", bipar)
+entry_inst.bind("<Return>", bipar_instrumento)
+
+tk.Label(janela, text="Bipe o CRACHÁ").pack(pady=5)
+entry_func = tk.Entry(janela, font=("Arial", 12))
+entry_func.pack()
+entry_func.bind("<Return>", bipar_funcionario)
 
 lbl_status = tk.Label(janela, text="", font=("Arial", 10))
-lbl_status.pack(pady=10)
+lbl_status.pack(pady=15)
 
-tk.Button(
-    janela,
-    text="Exportar para Excel",
-    bg="#1f6aa5",
-    fg="white",
-    font=("Arial", 11),
-    command=exportar_excel
-).pack(pady=5)
-
-entry_func.focus()
+entry_inst.focus()
 janela.mainloop()
->>>>>>> e7c3bf7ba42736141a14061e6d021af39ce282fd
