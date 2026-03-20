@@ -308,6 +308,122 @@ def query_grafico_vencimento():
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── QUERY: Calibrador Tampão Rosca ───────────────────────────────────────────
+
+def query_calibrador_rosca(filtros=None):
+    """
+    Retorna movimentações de instrumentos da família CALIBRADOR TAMPAO ROSCA,
+    incluindo qtd_utilizacoes registrada em cada retirada.
+    filtros: dict com chaves 'busca', 'instrumento', 'funcionario', 'data_ini', 'data_fim'
+    """
+    conn = conectar()
+    c = conn.cursor()
+    sql = """
+        SELECT
+            m.id,
+            m.id_instrumento,
+            COALESCE(m.nome_instrumento, i.nome, m.id_instrumento) AS nome_instrumento,
+            m.id_funcionario,
+            COALESCE(m.nome_funcionario, f.nome, m.id_funcionario) AS nome_funcionario,
+            m.data_saida,
+            m.data_devolucao,
+            m.status,
+            COALESCE(m.qtd_utilizacoes, 0) AS qtd_utilizacoes
+        FROM movimentacoes m
+        LEFT JOIN instrumentos i ON i.id_instrumento = m.id_instrumento
+        LEFT JOIN funcionarios f ON f.id_funcionario = m.id_funcionario
+        WHERE UPPER(COALESCE(i.familia, '')) = 'CALIBRADOR TAMPAO ROSCA'
+    """
+    params = []
+
+    if filtros:
+        if filtros.get("busca"):
+            termo = f"%{filtros['busca']}%"
+            sql += """ AND (
+                m.id_instrumento LIKE ? OR
+                COALESCE(m.nome_instrumento, i.nome, '') LIKE ? OR
+                m.id_funcionario LIKE ? OR
+                COALESCE(m.nome_funcionario, f.nome, '') LIKE ?
+            )"""
+            params += [termo, termo, termo, termo]
+
+        if filtros.get("instrumento") and filtros["instrumento"] != "TODOS":
+            sql += " AND m.id_instrumento = ?"
+            params.append(filtros["instrumento"])
+
+        if filtros.get("funcionario") and filtros["funcionario"] != "TODOS":
+            sql += " AND m.id_funcionario = ?"
+            params.append(filtros["funcionario"])
+
+        if filtros.get("data_ini"):
+            sql += " AND m.data_saida >= ?"
+            params.append(filtros["data_ini"] + " 00:00:00")
+
+        if filtros.get("data_fim"):
+            sql += " AND m.data_saida <= ?"
+            params.append(filtros["data_fim"] + " 23:59:59")
+
+    sql += " ORDER BY m.id DESC"
+    c.execute(sql, params)
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def query_ranking_calibrador():
+    """Total de utilizações por instrumento Calibrador Tampão Rosca."""
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT
+            m.id_instrumento,
+            COALESCE(m.nome_instrumento, i.nome, m.id_instrumento) AS nome,
+            COUNT(*) AS total_retiradas,
+            SUM(COALESCE(m.qtd_utilizacoes, 0)) AS total_utilizacoes
+        FROM movimentacoes m
+        LEFT JOIN instrumentos i ON i.id_instrumento = m.id_instrumento
+        WHERE UPPER(COALESCE(i.familia, '')) = 'CALIBRADOR TAMPAO ROSCA'
+        GROUP BY m.id_instrumento
+        ORDER BY total_utilizacoes DESC
+    """)
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def query_instrumentos_calibrador():
+    """Lista ids/nomes distintos de Calibrador Tampão Rosca para o combobox."""
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT DISTINCT m.id_instrumento,
+               COALESCE(m.nome_instrumento, i.nome, m.id_instrumento)
+        FROM movimentacoes m
+        LEFT JOIN instrumentos i ON i.id_instrumento = m.id_instrumento
+        WHERE UPPER(COALESCE(i.familia, '')) = 'CALIBRADOR TAMPAO ROSCA'
+        ORDER BY 2
+    """)
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def query_funcionarios_calibrador():
+    """Lista ids/nomes de funcionários que já usaram Calibrador Tampão Rosca."""
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT DISTINCT m.id_funcionario,
+               COALESCE(m.nome_funcionario, f.nome, m.id_funcionario)
+        FROM movimentacoes m
+        LEFT JOIN instrumentos i ON i.id_instrumento = m.id_instrumento
+        LEFT JOIN funcionarios f ON f.id_funcionario = m.id_funcionario
+        WHERE UPPER(COALESCE(i.familia, '')) = 'CALIBRADOR TAMPAO ROSCA'
+        ORDER BY 2
+    """)
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 # =========================
 # FORMATADORES
 # =========================
@@ -774,7 +890,238 @@ def limpar_filtros_venc():
     carregar_vencimentos()
 
 # ============================================================
-# ABA 4 — GRÁFICOS
+# ABA 4 — CALIBRADOR TAMPÃO ROSCA
+# ============================================================
+
+aba_cal = tk.Frame(notebook, bg=FUNDO)
+notebook.add(aba_cal, text="  🔩  Calibrador Tampão Rosca  ")
+
+# ---------- painel superior: ranking ----------
+painel_top_cal = tk.Frame(aba_cal, bg=FUNDO)
+painel_top_cal.pack(fill="x", padx=16, pady=(12, 0))
+
+tk.Label(painel_top_cal, text="RANKING — TOTAL DE UTILIZAÇÕES POR INSTRUMENTO",
+         font=("Arial", 10, "bold"), fg=AZUL, bg=FUNDO).pack(anchor="w")
+tk.Frame(painel_top_cal, bg=AZUL_MED, height=2).pack(fill="x", pady=(4, 6))
+
+frame_rank = tk.Frame(painel_top_cal, bg=FUNDO)
+frame_rank.pack(fill="x")
+
+style.configure("Rank.Treeview",
+    background=BRANCO, foreground="#1A1A1A",
+    rowheight=24, fieldbackground=BRANCO, font=("Arial", 9))
+style.configure("Rank.Treeview.Heading",
+    background=AZUL_ESC, foreground=BRANCO,
+    font=("Arial", 9, "bold"), relief="flat", padding=4)
+style.map("Rank.Treeview",
+    background=[("selected", AZUL_MED)], foreground=[("selected", BRANCO)])
+
+COLS_RANK = ("Pos.", "Código", "Nome", "Retiradas", "Total Utilizações")
+tree_rank = ttk.Treeview(frame_rank, columns=COLS_RANK,
+                          show="headings", style="Rank.Treeview", height=5)
+
+largs_rank = {"Pos.": 45, "Código": 120, "Nome": 260, "Retiradas": 100, "Total Utilizações": 140}
+for col in COLS_RANK:
+    tree_rank.heading(col, text=col)
+    tree_rank.column(col, width=largs_rank[col], minwidth=40,
+                     anchor="center" if col in ("Pos.", "Retiradas", "Total Utilizações") else "w")
+
+tree_rank.tag_configure("ouro",   background="#FFF8DC", foreground="#8B6914")
+tree_rank.tag_configure("prata",  background="#F5F5F5", foreground="#555")
+tree_rank.tag_configure("bronze", background="#FFF0E6", foreground="#8B4513")
+tree_rank.tag_configure("normal", background=BRANCO,    foreground="#1A1A1A")
+
+sb_rank = ttk.Scrollbar(frame_rank, orient="vertical", command=tree_rank.yview)
+tree_rank.configure(yscrollcommand=sb_rank.set)
+sb_rank.pack(side="right", fill="y")
+tree_rank.pack(fill="x")
+
+def carregar_ranking_calibrador():
+    for row in tree_rank.get_children():
+        tree_rank.delete(row)
+    dados = query_ranking_calibrador()
+    medalhas = {1: "🥇", 2: "🥈", 3: "🥉"}
+    tags_pos  = {1: "ouro", 2: "prata", 3: "bronze"}
+    for pos, (cod, nome, retiradas, utilizacoes) in enumerate(dados, start=1):
+        label_pos = f"{medalhas.get(pos, '')} {pos}º".strip()
+        tag = tags_pos.get(pos, "normal")
+        tree_rank.insert("", tk.END,
+                         values=(label_pos, cod, nome, retiradas, utilizacoes or 0),
+                         tags=(tag,))
+
+# ---------- separador ----------
+tk.Frame(aba_cal, bg=CINZA_CLR, height=1).pack(fill="x", padx=16, pady=10)
+
+# ---------- painel inferior: histórico detalhado ----------
+tk.Label(aba_cal, text="HISTÓRICO DETALHADO DE MOVIMENTAÇÕES",
+         font=("Arial", 10, "bold"), fg=AZUL, bg=FUNDO).pack(anchor="w", padx=16)
+tk.Frame(aba_cal, bg=AZUL_MED, height=2).pack(fill="x", padx=16, pady=(4, 0))
+
+# barra de filtros
+barra_cal = tk.Frame(aba_cal, bg=BRANCO, pady=8, padx=16)
+barra_cal.pack(fill="x")
+tk.Frame(barra_cal, bg=CINZA_CLR, height=1).pack(fill="x", side="bottom")
+
+def lbl_fc(parent, text):
+    tk.Label(parent, text=text, font=("Arial", 8, "bold"),
+             fg=CINZA, bg=BRANCO).pack(side="left", padx=(10, 2))
+
+lbl_fc(barra_cal, "🔍 BUSCA")
+entry_busca_cal = tk.Entry(barra_cal, font=("Arial", 10), bd=1, relief="solid",
+                            bg=BRANCO, fg="#1A1A1A", insertbackground=AZUL, width=20)
+entry_busca_cal.pack(side="left", ipady=4, padx=(0, 8))
+
+lbl_fc(barra_cal, "INSTRUMENTO")
+_insts_cal = [("TODOS", "TODOS")] + query_instrumentos_calibrador()
+_inst_nomes_cal = [f"{cod} — {nome}" if cod != "TODOS" else "TODOS" for cod, nome in _insts_cal]
+combo_inst_cal = ttk.Combobox(barra_cal, values=_inst_nomes_cal,
+                               state="readonly", width=26, font=("Arial", 9))
+combo_inst_cal.set("TODOS")
+combo_inst_cal.pack(side="left", padx=(0, 8), ipady=3)
+
+lbl_fc(barra_cal, "FUNCIONÁRIO")
+_funcs_cal = [("TODOS", "TODOS")] + query_funcionarios_calibrador()
+_func_nomes_cal = [f"{cod} — {nome}" if cod != "TODOS" else "TODOS" for cod, nome in _funcs_cal]
+combo_func_cal = ttk.Combobox(barra_cal, values=_func_nomes_cal,
+                               state="readonly", width=22, font=("Arial", 9))
+combo_func_cal.set("TODOS")
+combo_func_cal.pack(side="left", padx=(0, 8), ipady=3)
+
+lbl_fc(barra_cal, "DE")
+entry_cal_ini = tk.Entry(barra_cal, font=("Arial", 10), bd=1, relief="solid",
+                          bg=BRANCO, fg="#1A1A1A", width=11)
+entry_cal_ini.pack(side="left", ipady=4, padx=(0, 4))
+entry_cal_ini.insert(0, "AAAA-MM-DD")
+entry_cal_ini.bind("<FocusIn>", lambda e: entry_cal_ini.delete(0, tk.END)
+                   if entry_cal_ini.get() == "AAAA-MM-DD" else None)
+
+lbl_fc(barra_cal, "ATÉ")
+entry_cal_fim = tk.Entry(barra_cal, font=("Arial", 10), bd=1, relief="solid",
+                          bg=BRANCO, fg="#1A1A1A", width=11)
+entry_cal_fim.pack(side="left", ipady=4, padx=(0, 10))
+entry_cal_fim.insert(0, "AAAA-MM-DD")
+entry_cal_fim.bind("<FocusIn>", lambda e: entry_cal_fim.delete(0, tk.END)
+                   if entry_cal_fim.get() == "AAAA-MM-DD" else None)
+
+def btn_style_cal(parent, text, cmd, cor=AZUL):
+    b = tk.Button(parent, text=text, command=cmd,
+                  font=("Arial", 9, "bold"), bg=cor, fg=BRANCO,
+                  activebackground=AZUL_MED, activeforeground=BRANCO,
+                  relief="flat", cursor="hand2", padx=12, pady=4, bd=0)
+    b.pack(side="left", padx=3)
+    return b
+
+btn_style_cal(barra_cal, "Filtrar", lambda: aplicar_filtros_cal())
+btn_style_cal(barra_cal, "Limpar",  lambda: limpar_filtros_cal(), CINZA)
+
+# contador
+frame_info_cal = tk.Frame(aba_cal, bg=FUNDO, pady=3, padx=16)
+frame_info_cal.pack(fill="x")
+lbl_contagem_cal = tk.Label(frame_info_cal, text="",
+                             font=("Arial", 8), fg=CINZA, bg=FUNDO)
+lbl_contagem_cal.pack(side="left")
+
+lbl_total_util = tk.Label(frame_info_cal, text="",
+                           font=("Arial", 8, "bold"), fg=AZUL, bg=FUNDO)
+lbl_total_util.pack(side="right")
+
+# tabela histórico
+style.configure("Cal.Treeview",
+    background=BRANCO, foreground="#1A1A1A",
+    rowheight=26, fieldbackground=BRANCO, font=("Arial", 9))
+style.configure("Cal.Treeview.Heading",
+    background=AZUL, foreground=BRANCO,
+    font=("Arial", 9, "bold"), relief="flat", padding=5)
+style.map("Cal.Treeview",
+    background=[("selected", AZUL_MED)], foreground=[("selected", BRANCO)])
+
+frame_tree_cal = tk.Frame(aba_cal, bg=FUNDO)
+frame_tree_cal.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+COLS_CAL = ("ID", "Código", "Instrumento", "Crachá", "Funcionário",
+            "Retirada", "Devolução", "Status", "Nº Utilizações")
+tree_cal = ttk.Treeview(frame_tree_cal, columns=COLS_CAL,
+                         show="headings", style="Cal.Treeview")
+
+largs_cal = {"ID": 40, "Código": 100, "Instrumento": 200, "Crachá": 80,
+             "Funcionário": 150, "Retirada": 130, "Devolução": 130,
+             "Status": 90, "Nº Utilizações": 110}
+for col in COLS_CAL:
+    tree_cal.heading(col, text=col)
+    tree_cal.column(col, width=largs_cal[col], minwidth=40,
+                    anchor="center" if col in ("ID", "Status", "Nº Utilizações") else "w")
+
+tree_cal.tag_configure("em_uso",    background=LARANJA_BG, foreground=LARANJA)
+tree_cal.tag_configure("devolvido", background=VERDE_BG,   foreground=VERDE)
+
+sb_cal_y = ttk.Scrollbar(frame_tree_cal, orient="vertical",   command=tree_cal.yview)
+sb_cal_x = ttk.Scrollbar(frame_tree_cal, orient="horizontal",  command=tree_cal.xview)
+tree_cal.configure(yscrollcommand=sb_cal_y.set, xscrollcommand=sb_cal_x.set)
+sb_cal_y.pack(side="right",  fill="y")
+sb_cal_x.pack(side="bottom", fill="x")
+tree_cal.pack(fill="both", expand=True)
+
+def carregar_historico_cal(filtros=None):
+    for row in tree_cal.get_children():
+        tree_cal.delete(row)
+
+    dados = query_calibrador_rosca(filtros)
+    total_util = 0
+
+    for r in dados:
+        id_, cod, nome_inst, cracha, nome_func, data_s, data_d, status, qtd = r
+        total_util += qtd or 0
+        tag = "em_uso" if status == "EM USO" else "devolvido"
+        tree_cal.insert("", tk.END, values=(
+            id_, cod, nome_inst, cracha, nome_func,
+            fmt_dt(data_s), fmt_dt(data_d), status,
+            qtd if qtd else "—",
+        ), tags=(tag,))
+
+    lbl_contagem_cal.config(text=f"{len(dados)} registro(s) encontrado(s)")
+    lbl_total_util.config(
+        text=f"Total de utilizações no período: {total_util}"
+    )
+
+def aplicar_filtros_cal():
+    # Resolve instrumento selecionado no combo
+    sel_inst = combo_inst_cal.get()
+    cod_inst = None
+    if sel_inst != "TODOS":
+        # formato "COD — Nome", pega o código antes do " — "
+        cod_inst = sel_inst.split(" — ")[0].strip()
+
+    sel_func = combo_func_cal.get()
+    cod_func = None
+    if sel_func != "TODOS":
+        cod_func = sel_func.split(" — ")[0].strip()
+
+    di = entry_cal_ini.get().strip()
+    df = entry_cal_fim.get().strip()
+
+    filtros = {
+        "busca":       entry_busca_cal.get().strip(),
+        "instrumento": cod_inst or "TODOS",
+        "funcionario": cod_func or "TODOS",
+        "data_ini":    di if di not in ("", "AAAA-MM-DD") else "",
+        "data_fim":    df if df not in ("", "AAAA-MM-DD") else "",
+    }
+    carregar_historico_cal(filtros)
+
+def limpar_filtros_cal():
+    entry_busca_cal.delete(0, tk.END)
+    combo_inst_cal.set("TODOS")
+    combo_func_cal.set("TODOS")
+    entry_cal_ini.delete(0, tk.END)
+    entry_cal_ini.insert(0, "AAAA-MM-DD")
+    entry_cal_fim.delete(0, tk.END)
+    entry_cal_fim.insert(0, "AAAA-MM-DD")
+    carregar_historico_cal()
+
+entry_busca_cal.bind("<Return>", lambda e: aplicar_filtros_cal())
+
+# ============================================================
+# ABA 5 — GRÁFICOS
 # ============================================================
 
 aba_graficos = tk.Frame(notebook, bg=FUNDO)
@@ -987,6 +1334,17 @@ def atualizar_tudo():
     carregar_tabela()
     carregar_status()
     carregar_vencimentos()
+    carregar_ranking_calibrador()
+    carregar_historico_cal()
+
+    # Atualiza combos da aba Calibrador com dados mais recentes
+    insts = [("TODOS", "TODOS")] + query_instrumentos_calibrador()
+    inst_nomes = [f"{cod} — {nome}" if cod != "TODOS" else "TODOS" for cod, nome in insts]
+    combo_inst_cal["values"] = inst_nomes
+
+    funcs = [("TODOS", "TODOS")] + query_funcionarios_calibrador()
+    func_nomes = [f"{cod} — {nome}" if cod != "TODOS" else "TODOS" for cod, nome in funcs]
+    combo_func_cal["values"] = func_nomes
 
     t, u, d, m, f = query_resumo()
     lbl_card_total.config(text=str(t))
