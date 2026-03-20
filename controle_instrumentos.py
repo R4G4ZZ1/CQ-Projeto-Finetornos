@@ -64,7 +64,15 @@ def inicializar_banco():
         )
     """)
 
-    colunas_extras = [
+    # Migração automática de colunas extras
+    colunas_inst = [("data_vencimento", "TEXT")]
+    c.execute("PRAGMA table_info(instrumentos)")
+    cols_inst = {row[1] for row in c.fetchall()}
+    for col, tipo in colunas_inst:
+        if col not in cols_inst:
+            c.execute(f"ALTER TABLE instrumentos ADD COLUMN {col} {tipo}")
+
+    colunas_mov = [
         ("nome_funcionario",  "TEXT"),
         ("nome_instrumento",  "TEXT"),
         ("devolvido_por",     "TEXT"),
@@ -72,9 +80,9 @@ def inicializar_banco():
         ("qtd_utilizacoes",   "INTEGER"),
     ]
     c.execute("PRAGMA table_info(movimentacoes)")
-    colunas_existentes = {row[1] for row in c.fetchall()}
-    for col, tipo in colunas_extras:
-        if col not in colunas_existentes:
+    cols_mov = {row[1] for row in c.fetchall()}
+    for col, tipo in colunas_mov:
+        if col not in cols_mov:
             c.execute(f"ALTER TABLE movimentacoes ADD COLUMN {col} {tipo}")
 
     conn.commit()
@@ -97,13 +105,13 @@ def buscar_instrumento(codigo):
     conn = conectar()
     c = conn.cursor()
     c.execute("""
-        SELECT nome, status, familia
+        SELECT nome, status, familia, data_vencimento
         FROM instrumentos
         WHERE id_instrumento=?
     """, (codigo,))
     r = c.fetchone()
     conn.close()
-    return r
+    return r  # (nome, status, familia, data_vencimento)
 
 def buscar_funcionario(cracha):
     conn = conectar()
@@ -126,16 +134,21 @@ def buscar_quem_esta_com_instrumento(codigo):
     conn.close()
     return r
 
+def instrumento_esta_vencido(data_vencimento_str):
+    """Retorna True se a data de vencimento já passou."""
+    if not data_vencimento_str:
+        return False
+    try:
+        dt_venc = datetime.strptime(data_vencimento_str, "%d/%m/%Y")
+        return dt_venc < datetime.today()
+    except ValueError:
+        return False
+
 # =========================
 # MODAL — QUANTIDADE DE UTILIZAÇÕES
-# Aparece somente para instrumentos da família "Calibrador de Rosca"
+# Aparece somente para instrumentos da família "CALIBRADOR TAMPAO ROSCA"
 # =========================
 def pedir_quantidade_utilizacoes(nome_instr, codigo_instr):
-    """
-    Abre uma janela modal e solicita ao funcionário quantas vezes
-    o Calibrador de Rosca será utilizado.
-    Retorna o inteiro informado, ou None se o usuário cancelar.
-    """
     resultado = {"valor": None}
 
     dialogo = tk.Toplevel(janela)
@@ -143,82 +156,45 @@ def pedir_quantidade_utilizacoes(nome_instr, codigo_instr):
     dialogo.geometry("420x280")
     dialogo.resizable(False, False)
     dialogo.configure(bg=FUNDO)
-
-    # Bloqueia a janela principal enquanto o modal está aberto
     dialogo.grab_set()
     dialogo.focus_force()
 
-    # Centraliza sobre a janela principal
     dialogo.update_idletasks()
     x = janela.winfo_x() + (janela.winfo_width()  - 420) // 2
     y = janela.winfo_y() + (janela.winfo_height() - 280) // 2
     dialogo.geometry(f"+{x}+{y}")
 
-    # ---------- cabeçalho ----------
     cab = tk.Frame(dialogo, bg=AZUL_MED, height=52)
     cab.pack(fill="x")
     cab.pack_propagate(False)
-    tk.Label(
-        cab,
-        text="Calibrador de Rosca — Nº de Utilizações",
-        font=("Arial", 11, "bold"),
-        fg=BRANCO,
-        bg=AZUL_MED,
-    ).pack(expand=True)
+    tk.Label(cab, text="Calibrador Tampão Rosca — Nº de Utilizações",
+             font=("Arial", 11, "bold"), fg=BRANCO, bg=AZUL_MED).pack(expand=True)
 
-    # ---------- corpo ----------
     corpo_dlg = tk.Frame(dialogo, bg=FUNDO, padx=26, pady=14)
     corpo_dlg.pack(fill="both", expand=True)
 
-    tk.Label(
-        corpo_dlg,
-        text=f"{nome_instr}  ({codigo_instr})",
-        font=("Arial", 9),
-        fg=CINZA,
-        bg=FUNDO,
-        anchor="w",
-    ).pack(fill="x")
+    tk.Label(corpo_dlg, text=f"{nome_instr}  ({codigo_instr})",
+             font=("Arial", 9), fg=CINZA, bg=FUNDO, anchor="w").pack(fill="x")
 
-    tk.Label(
-        corpo_dlg,
-        text="Quantas vezes este instrumento será utilizado?",
-        font=("Arial", 11),
-        fg="#1A1A1A",
-        bg=FUNDO,
-        wraplength=360,
-        justify="left",
-    ).pack(anchor="w", pady=(10, 8))
+    tk.Label(corpo_dlg, text="Quantas vezes este instrumento será utilizado?",
+             font=("Arial", 11), fg="#1A1A1A", bg=FUNDO,
+             wraplength=360, justify="left").pack(anchor="w", pady=(10, 8))
 
-    # Validação: aceita somente dígitos
     vcmd = dialogo.register(lambda val: val.isdigit() or val == "")
-
-    frame_entry = tk.Frame(
-        corpo_dlg, bg=BRANCO,
-        highlightbackground=AZUL_MED,
-        highlightthickness=2,
-    )
+    frame_entry = tk.Frame(corpo_dlg, bg=BRANCO,
+                           highlightbackground=AZUL_MED, highlightthickness=2)
     frame_entry.pack(fill="x", ipady=2)
 
-    entry_qtd = tk.Entry(
-        frame_entry,
-        font=("Arial", 18, "bold"),
-        bd=0, relief="flat",
-        bg=BRANCO, fg=AZUL,
-        insertbackground=AZUL,
-        justify="center",
-        validate="key",
-        validatecommand=(vcmd, "%P"),
-    )
+    entry_qtd = tk.Entry(frame_entry, font=("Arial", 18, "bold"),
+                         bd=0, relief="flat", bg=BRANCO, fg=AZUL,
+                         insertbackground=AZUL, justify="center",
+                         validate="key", validatecommand=(vcmd, "%P"))
     entry_qtd.pack(fill="x", ipady=8, padx=10)
     entry_qtd.focus_set()
 
-    lbl_erro = tk.Label(
-        corpo_dlg, text="",
-        font=("Arial", 8), fg="#B71C1C", bg=FUNDO,
-    )
+    lbl_erro = tk.Label(corpo_dlg, text="", font=("Arial", 8), fg="#B71C1C", bg=FUNDO)
     lbl_erro.pack(anchor="w", pady=(2, 0))
 
-    # ---------- botões ----------
     frame_btns = tk.Frame(dialogo, bg=FUNDO, pady=8, padx=26)
     frame_btns.pack(fill="x")
 
@@ -234,31 +210,17 @@ def pedir_quantidade_utilizacoes(nome_instr, codigo_instr):
     def cancelar():
         dialogo.destroy()
 
-    tk.Button(
-        frame_btns,
-        text="Confirmar",
-        font=("Arial", 10, "bold"),
-        bg=AZUL_MED, fg=BRANCO,
-        activebackground=AZUL, activeforeground=BRANCO,
-        relief="flat", cursor="hand2",
-        padx=20, pady=6,
-        command=confirmar,
-    ).pack(side="right")
+    tk.Button(frame_btns, text="Confirmar", font=("Arial", 10, "bold"),
+              bg=AZUL_MED, fg=BRANCO, activebackground=AZUL, activeforeground=BRANCO,
+              relief="flat", cursor="hand2", padx=20, pady=6,
+              command=confirmar).pack(side="right")
 
-    tk.Button(
-        frame_btns,
-        text="Cancelar",
-        font=("Arial", 10),
-        bg=CINZA_CLR, fg="#333",
-        activebackground=CINZA,
-        relief="flat", cursor="hand2",
-        padx=20, pady=6,
-        command=cancelar,
-    ).pack(side="right", padx=(0, 8))
+    tk.Button(frame_btns, text="Cancelar", font=("Arial", 10),
+              bg=CINZA_CLR, fg="#333", activebackground=CINZA,
+              relief="flat", cursor="hand2", padx=20, pady=6,
+              command=cancelar).pack(side="right", padx=(0, 8))
 
     entry_qtd.bind("<Return>", confirmar)
-
-    # Aguarda o modal fechar antes de continuar
     dialogo.wait_window()
     return resultado["valor"]
 
@@ -281,17 +243,58 @@ def bipar_instrumento(event=None):
         limpar_campos()
         return
 
-    nome_instrumento, status, familia_instrumento = dados
+    nome_instrumento, status, familia_instrumento, data_vencimento = dados
     instrumento_atual = codigo
 
-    if status == "DISPONIVEL":
+    # ── NOVO: bloqueia retirada se instrumento estiver vencido ──────────
+    if status != "EM USO" and instrumento_esta_vencido(data_vencimento):
+        # Garante que o status no banco esteja como VENCIDO
+        conn = conectar()
+        conn.execute("UPDATE instrumentos SET status='VENCIDO' WHERE id_instrumento=?", (codigo,))
+        conn.commit()
+        conn.close()
+        set_status("error",
+            f"⛔  INSTRUMENTO VENCIDO\n\n"
+            f"{nome_instrumento}  ({codigo})\n"
+            f"Vencimento: {data_vencimento}\n\n"
+            "Favor avisar ao líder do CQ.\n"
+            "A retirada não é permitida."
+        )
+        limpar_campos()
+        return
+    # ────────────────────────────────────────────────────────────────────
+
+    if status in ("DISPONIVEL",):
         acao_atual = "RETIRANDO"
+
+        # Alerta se vence em breve (≤ 30 dias) mas ainda não venceu
+        aviso_venc = ""
+        if data_vencimento:
+            try:
+                dt_venc = datetime.strptime(data_vencimento, "%d/%m/%Y")
+                delta = (dt_venc - datetime.today()).days
+                if 0 <= delta <= 30:
+                    aviso_venc = f"\n⚠  Atenção: vence em {delta} dia(s)!"
+            except ValueError:
+                pass
+
         set_status("info",
             f"{nome_instrumento}  ({codigo})\n"
-            "Status: DISPONÍVEL\n\n"
+            f"Status: DISPONÍVEL{aviso_venc}\n\n"
             "Bipe o crachá do funcionário"
         )
+    elif status == "VENCIDO":
+        set_status("error",
+            f"⛔  INSTRUMENTO VENCIDO\n\n"
+            f"{nome_instrumento}  ({codigo})\n"
+            f"Vencimento: {data_vencimento or '—'}\n\n"
+            "Favor avisar ao líder do CQ.\n"
+            "A retirada não é permitida."
+        )
+        limpar_campos()
+        return
     else:
+        # EM USO — fluxo de devolução
         acao_atual = "DEVOLVENDO"
 
         info = buscar_quem_esta_com_instrumento(codigo)
@@ -336,7 +339,6 @@ def bipar_funcionario(event=None):
     # ================= RETIRADA =================
     if acao_atual == "RETIRANDO":
 
-        # --- Calibrador de Rosca: pede quantidade ANTES da confirmação ---
         qtd_utilizacoes = None
         eh_calibrador_rosca = (
             familia_instrumento is not None
@@ -345,9 +347,7 @@ def bipar_funcionario(event=None):
 
         if eh_calibrador_rosca:
             conn.close()
-            qtd_utilizacoes = pedir_quantidade_utilizacoes(
-                nome_instrumento, instrumento_atual
-            )
+            qtd_utilizacoes = pedir_quantidade_utilizacoes(nome_instrumento, instrumento_atual)
             if qtd_utilizacoes is None:
                 limpar_campos()
                 return
@@ -374,34 +374,15 @@ def bipar_funcionario(event=None):
 
         c.execute("""
             INSERT INTO movimentacoes
-            (
-                id_funcionario,
-                nome_funcionario,
-                id_instrumento,
-                nome_instrumento,
-                data_saida,
-                status,
-                qtd_utilizacoes
-            )
+            (id_funcionario, nome_funcionario, id_instrumento, nome_instrumento,
+             data_saida, status, qtd_utilizacoes)
             VALUES (?, ?, ?, ?, ?, 'EM USO', ?)
-        """, (
-            cracha,
-            nome_func,
-            instrumento_atual,
-            nome_instrumento,
-            agora(),
-            qtd_utilizacoes,
-        ))
+        """, (cracha, nome_func, instrumento_atual, nome_instrumento, agora(), qtd_utilizacoes))
 
-        c.execute("""
-            UPDATE instrumentos SET status='EM USO'
-            WHERE id_instrumento=?
-        """, (instrumento_atual,))
+        c.execute("UPDATE instrumentos SET status='EM USO' WHERE id_instrumento=?",
+                  (instrumento_atual,))
 
-        msg_qtd = (
-            f"\nUtilizações previstas: {qtd_utilizacoes}"
-            if qtd_utilizacoes else ""
-        )
+        msg_qtd = f"\nUtilizações previstas: {qtd_utilizacoes}" if qtd_utilizacoes else ""
         set_status("success",
             f"✅  RETIRADA REGISTRADA\n\n"
             f"Funcionário: {nome_func}\n"
@@ -412,7 +393,6 @@ def bipar_funcionario(event=None):
 
     # ================= DEVOLUÇÃO =================
     else:
-
         if cracha != funcionario_retirou:
             conn.close()
             messagebox.showerror(
@@ -446,23 +426,30 @@ def bipar_funcionario(event=None):
         if mov:
             c.execute("""
                 UPDATE movimentacoes
-                SET
-                    data_devolucao=?,
-                    status='DEVOLVIDO',
-                    devolvido_por=?
+                SET data_devolucao=?, status='DEVOLVIDO', devolvido_por=?
                 WHERE id=?
             """, (agora(), nome_func, mov[0]))
 
-        c.execute("""
-            UPDATE instrumentos SET status='DISPONIVEL'
-            WHERE id_instrumento=?
-        """, (instrumento_atual,))
+        # Após devolução, verifica se já está vencido para definir o status correto
+        c.execute("SELECT data_vencimento FROM instrumentos WHERE id_instrumento=?",
+                  (instrumento_atual,))
+        row = c.fetchone()
+        data_venc = row[0] if row else None
+        novo_status = "VENCIDO" if instrumento_esta_vencido(data_venc) else "DISPONIVEL"
 
+        c.execute("UPDATE instrumentos SET status=? WHERE id_instrumento=?",
+                  (novo_status, instrumento_atual))
+
+        aviso_venc = (
+            "\n\n⚠  Instrumento devolvido como VENCIDO.\nAvise o líder do CQ."
+            if novo_status == "VENCIDO" else ""
+        )
         set_status("success",
             f"🔁  DEVOLUÇÃO REGISTRADA\n\n"
             f"Funcionário: {nome_func}\n"
             f"Instrumento: {nome_instrumento} ({instrumento_atual})\n"
             f"Horário: {datetime.now().strftime('%d/%m/%Y  %H:%M:%S')}"
+            f"{aviso_venc}"
         )
 
     conn.commit()
@@ -498,7 +485,7 @@ inicializar_banco()
 
 janela = tk.Tk()
 janela.title("Controle de Instrumentos — Finetornos")
-janela.geometry("500x600")
+janela.geometry("500x620")
 janela.resizable(False, False)
 janela.configure(bg=FUNDO)
 
@@ -507,21 +494,11 @@ header = tk.Frame(janela, bg=AZUL, height=80)
 header.pack(fill="x")
 header.pack_propagate(False)
 
-tk.Label(
-    header,
-    text="FINETORNOS",
-    font=("Arial Black", 22, "bold"),
-    fg=BRANCO,
-    bg=AZUL,
-).pack(side="left", padx=20, pady=18)
+tk.Label(header, text="FINETORNOS", font=("Arial Black", 22, "bold"),
+         fg=BRANCO, bg=AZUL).pack(side="left", padx=20, pady=18)
 
-tk.Label(
-    header,
-    text="Controle de Qualidade",
-    font=("Arial", 9),
-    fg=CINZA_CLR,
-    bg=AZUL,
-).place(x=22, y=50)
+tk.Label(header, text="Controle de Qualidade", font=("Arial", 9),
+         fg=CINZA_CLR, bg=AZUL).place(x=22, y=50)
 
 tk.Frame(janela, bg=AZUL_MED, height=4).pack(fill="x")
 
@@ -530,24 +507,16 @@ corpo = tk.Frame(janela, bg=FUNDO, padx=28, pady=20)
 corpo.pack(fill="both", expand=True)
 
 # --- Instrumento ---
-tk.Label(
-    corpo,
-    text="INSTRUMENTO",
-    font=("Arial", 8, "bold"),
-    fg=CINZA, bg=FUNDO, anchor="w",
-).pack(fill="x", pady=(0, 4))
+tk.Label(corpo, text="INSTRUMENTO", font=("Arial", 8, "bold"),
+         fg=CINZA, bg=FUNDO, anchor="w").pack(fill="x", pady=(0, 4))
 
-frame_inst = tk.Frame(corpo, bg=BRANCO,
-                      highlightbackground=CINZA_CLR, highlightthickness=1)
+frame_inst = tk.Frame(corpo, bg=BRANCO, highlightbackground=CINZA_CLR, highlightthickness=1)
 frame_inst.pack(fill="x", ipady=2)
 
 tk.Label(frame_inst, text="  🔧", bg=BRANCO, font=("Arial", 13)).pack(side="left")
 
-entry_inst = tk.Entry(
-    frame_inst,
-    font=("Arial", 13), bd=0, relief="flat",
-    bg=BRANCO, fg="#1A1A1A", insertbackground=AZUL,
-)
+entry_inst = tk.Entry(frame_inst, font=("Arial", 13), bd=0, relief="flat",
+                      bg=BRANCO, fg="#1A1A1A", insertbackground=AZUL)
 entry_inst.pack(side="left", fill="x", expand=True, ipady=8, padx=(4, 10))
 entry_inst.bind("<Return>", bipar_instrumento)
 entry_inst.bind("<FocusIn>",  lambda e: frame_inst.config(highlightbackground=AZUL))
@@ -556,24 +525,16 @@ entry_inst.bind("<FocusOut>", lambda e: frame_inst.config(highlightbackground=CI
 tk.Label(corpo, bg=FUNDO, height=1).pack()
 
 # --- Crachá ---
-tk.Label(
-    corpo,
-    text="CRACHÁ DO FUNCIONÁRIO",
-    font=("Arial", 8, "bold"),
-    fg=CINZA, bg=FUNDO, anchor="w",
-).pack(fill="x", pady=(0, 4))
+tk.Label(corpo, text="CRACHÁ DO FUNCIONÁRIO", font=("Arial", 8, "bold"),
+         fg=CINZA, bg=FUNDO, anchor="w").pack(fill="x", pady=(0, 4))
 
-frame_func = tk.Frame(corpo, bg=BRANCO,
-                      highlightbackground=CINZA_CLR, highlightthickness=1)
+frame_func = tk.Frame(corpo, bg=BRANCO, highlightbackground=CINZA_CLR, highlightthickness=1)
 frame_func.pack(fill="x", ipady=2)
 
 tk.Label(frame_func, text="  👤", bg=BRANCO, font=("Arial", 13)).pack(side="left")
 
-entry_func = tk.Entry(
-    frame_func,
-    font=("Arial", 13), bd=0, relief="flat",
-    bg=BRANCO, fg="#1A1A1A", insertbackground=AZUL,
-)
+entry_func = tk.Entry(frame_func, font=("Arial", 13), bd=0, relief="flat",
+                      bg=BRANCO, fg="#1A1A1A", insertbackground=AZUL)
 entry_func.pack(side="left", fill="x", expand=True, ipady=8, padx=(4, 10))
 entry_func.bind("<Return>", bipar_funcionario)
 entry_func.bind("<FocusIn>",  lambda e: frame_func.config(highlightbackground=AZUL))
@@ -603,17 +564,11 @@ footer = tk.Frame(janela, bg=AZUL_ESC, height=34)
 footer.pack(fill="x", side="bottom")
 footer.pack_propagate(False)
 
-tk.Label(
-    footer,
-    text=f"CQ · {datetime.now().strftime('%d/%m/%Y')}",
-    font=("Arial", 8), fg=CINZA, bg=AZUL_ESC,
-).pack(side="right", padx=16, pady=8)
+tk.Label(footer, text=f"CQ · {datetime.now().strftime('%d/%m/%Y')}",
+         font=("Arial", 8), fg=CINZA, bg=AZUL_ESC).pack(side="right", padx=16, pady=8)
 
-tk.Label(
-    footer,
-    text="Sistema de Movimentação",
-    font=("Arial", 8), fg=CINZA, bg=AZUL_ESC,
-).pack(side="left", padx=16, pady=8)
+tk.Label(footer, text="Sistema de Movimentação",
+         font=("Arial", 8), fg=CINZA, bg=AZUL_ESC).pack(side="left", padx=16, pady=8)
 
 entry_inst.focus()
 janela.mainloop()

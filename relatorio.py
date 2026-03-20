@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # matplotlib embutido no tkinter
 import matplotlib
@@ -36,8 +36,9 @@ LARANJA   = "#8A5000"
 LARANJA_BG= "#FFF5E6"
 VERM      = "#B71C1C"
 VERM_BG   = "#FDECEA"
+AMARELO   = "#856404"
+AMARELO_BG= "#FFF3CD"
 
-# paleta para gráficos
 CHART_COLORS = ["#1B3F72","#2056A0","#9EA8B0","#3A7BD5","#6FA3EF",
                 "#122B52","#D6DCE1","#4C8CB5","#7FAECC","#B3CDE0"]
 
@@ -46,7 +47,6 @@ CHART_COLORS = ["#1B3F72","#2056A0","#9EA8B0","#3A7BD5","#6FA3EF",
 # =========================
 
 def query_movimentacoes(filtros=None):
-    """Retorna todas as movimentações com JOIN em nomes."""
     conn = conectar()
     c = conn.cursor()
 
@@ -191,6 +191,123 @@ def query_resumo():
     conn.close()
     return total_inst, em_uso, disponivel, total_mov, total_func
 
+# ── NOVO: queries de vencimento ──────────────────────────────────────────────
+
+def query_instrumentos_vencimento(filtro_venc=None, venc_ini=None, venc_fim=None):
+    """
+    Retorna todos os instrumentos com data de vencimento, opcionalmente filtrados.
+    filtro_venc: 'VENCIDO' | 'EXPIRANDO_30' | 'EXPIRANDO_60' | 'TODOS'
+    venc_ini / venc_fim: strings 'DD/MM/AAAA' para filtro por intervalo de data
+    """
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id_instrumento, nome, familia, status, data_vencimento
+        FROM instrumentos
+        WHERE data_vencimento IS NOT NULL AND data_vencimento != ''
+        ORDER BY data_vencimento ASC
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    hoje = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+    resultado = []
+
+    for cod, nome, familia, status, venc_str in rows:
+        try:
+            dt_venc = datetime.strptime(venc_str, "%d/%m/%Y")
+        except ValueError:
+            continue
+
+        delta = (dt_venc - hoje).days
+
+        # Aplica filtro de situação
+        if filtro_venc == "VENCIDO" and delta >= 0:
+            continue
+        if filtro_venc == "EXPIRANDO_30" and not (0 <= delta <= 30):
+            continue
+        if filtro_venc == "EXPIRANDO_60" and not (0 <= delta <= 60):
+            continue
+
+        # Aplica filtro de intervalo de data
+        if venc_ini:
+            try:
+                dt_ini = datetime.strptime(venc_ini, "%d/%m/%Y")
+                if dt_venc < dt_ini:
+                    continue
+            except ValueError:
+                pass
+        if venc_fim:
+            try:
+                dt_fim = datetime.strptime(venc_fim, "%d/%m/%Y")
+                if dt_venc > dt_fim:
+                    continue
+            except ValueError:
+                pass
+
+        # Classifica situação
+        if delta < 0:
+            situacao = "VENCIDO"
+        elif delta <= 30:
+            situacao = f"Vence em {delta}d"
+        elif delta <= 60:
+            situacao = f"Vence em {delta}d"
+        else:
+            situacao = f"Vence em {delta}d"
+
+        resultado.append((cod, nome, familia or "—", status, venc_str, delta, situacao))
+
+    return resultado
+
+def query_grafico_vencimento():
+    """
+    Retorna dados para o gráfico de vencimentos:
+    - Já vencidos
+    - Vencem em até 30 dias
+    - Vencem entre 31 e 60 dias
+    - Vencem entre 61 e 90 dias
+    - Vencem após 90 dias
+    """
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("""
+        SELECT id_instrumento, nome, data_vencimento
+        FROM instrumentos
+        WHERE data_vencimento IS NOT NULL AND data_vencimento != ''
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    hoje = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+    buckets = {
+        "Vencidos":       [],
+        "Até 30 dias":    [],
+        "31 – 60 dias":   [],
+        "61 – 90 dias":   [],
+        "Acima de 90d":   [],
+    }
+
+    for cod, nome, venc_str in rows:
+        try:
+            dt_venc = datetime.strptime(venc_str, "%d/%m/%Y")
+        except ValueError:
+            continue
+        delta = (dt_venc - hoje).days
+        if delta < 0:
+            buckets["Vencidos"].append(nome)
+        elif delta <= 30:
+            buckets["Até 30 dias"].append(nome)
+        elif delta <= 60:
+            buckets["31 – 60 dias"].append(nome)
+        elif delta <= 90:
+            buckets["61 – 90 dias"].append(nome)
+        else:
+            buckets["Acima de 90d"].append(nome)
+
+    return buckets
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 # =========================
 # FORMATADORES
 # =========================
@@ -238,11 +355,9 @@ tk.Label(header, text="FINETORNOS", font=("Arial Black", 20, "bold"),
 tk.Label(header, text="Dashboard · Controle de Instrumentos",
          font=("Arial", 9), fg=CINZA_CLR, bg=AZUL).place(x=22, y=46)
 
-# cards de resumo no header
 frame_cards = tk.Frame(header, bg=AZUL)
 frame_cards.pack(side="right", padx=20, pady=8)
 
-card_labels = {}
 def make_card(parent, titulo, valor, cor_val=BRANCO):
     f = tk.Frame(parent, bg=AZUL_ESC, padx=12, pady=4)
     f.pack(side="left", padx=4)
@@ -251,11 +366,12 @@ def make_card(parent, titulo, valor, cor_val=BRANCO):
     lbl.pack()
     return lbl
 
-lbl_card_total    = make_card(frame_cards, "INSTRUMENTOS", "—")
-lbl_card_uso      = make_card(frame_cards, "EM USO",       "—", "#FFB347")
-lbl_card_disp     = make_card(frame_cards, "DISPONÍVEIS",  "—", "#6FCF97")
-lbl_card_mov      = make_card(frame_cards, "MOVIMENTAÇÕES","—")
-lbl_card_func     = make_card(frame_cards, "FUNCIONÁRIOS", "—")
+lbl_card_total   = make_card(frame_cards, "INSTRUMENTOS",  "—")
+lbl_card_uso     = make_card(frame_cards, "EM USO",        "—", "#FFB347")
+lbl_card_disp    = make_card(frame_cards, "DISPONÍVEIS",   "—", "#6FCF97")
+lbl_card_venc    = make_card(frame_cards, "VENCIDOS",      "—", "#FF6B6B")   # ← NOVO
+lbl_card_mov     = make_card(frame_cards, "MOVIMENTAÇÕES", "—")
+lbl_card_func    = make_card(frame_cards, "FUNCIONÁRIOS",  "—")
 
 tk.Frame(root, bg=AZUL_MED, height=4).pack(fill="x")
 
@@ -280,7 +396,6 @@ notebook.pack(fill="both", expand=True)
 aba_tabela = tk.Frame(notebook, bg=FUNDO)
 notebook.add(aba_tabela, text="  📋  Movimentações  ")
 
-# --- barra de filtros ---
 barra = tk.Frame(aba_tabela, bg=BRANCO, pady=10, padx=16)
 barra.pack(fill="x")
 tk.Frame(barra, bg=AZUL_MED, height=2).pack(fill="x", side="bottom")
@@ -289,20 +404,17 @@ def lbl_filtro(parent, text):
     tk.Label(parent, text=text, font=("Arial", 8, "bold"),
              fg=CINZA, bg=BRANCO).pack(side="left", padx=(10, 2))
 
-# Busca geral
 lbl_filtro(barra, "🔍 BUSCA")
 entry_busca = tk.Entry(barra, font=("Arial", 10), bd=1, relief="solid",
                        bg=BRANCO, fg="#1A1A1A", insertbackground=AZUL, width=22)
 entry_busca.pack(side="left", ipady=4, padx=(0, 8))
 
-# Status
 lbl_filtro(barra, "STATUS")
 combo_status = ttk.Combobox(barra, values=["TODOS", "EM USO", "DEVOLVIDO"],
                              state="readonly", width=12, font=("Arial", 9))
 combo_status.set("TODOS")
 combo_status.pack(side="left", padx=(0, 8), ipady=3)
 
-# Família
 familias_lista = ["TODAS"] + query_familias_disponiveis()
 lbl_filtro(barra, "FAMÍLIA")
 combo_fam_filtro = ttk.Combobox(barra, values=familias_lista,
@@ -310,13 +422,12 @@ combo_fam_filtro = ttk.Combobox(barra, values=familias_lista,
 combo_fam_filtro.set("TODAS")
 combo_fam_filtro.pack(side="left", padx=(0, 8), ipady=3)
 
-# Datas
 lbl_filtro(barra, "DE")
 entry_data_ini = tk.Entry(barra, font=("Arial", 10), bd=1, relief="solid",
                            bg=BRANCO, fg="#1A1A1A", width=11)
 entry_data_ini.pack(side="left", ipady=4, padx=(0, 4))
 entry_data_ini.insert(0, "AAAA-MM-DD")
-entry_data_ini.bind("<FocusIn>",  lambda e: entry_data_ini.delete(0, tk.END)
+entry_data_ini.bind("<FocusIn>", lambda e: entry_data_ini.delete(0, tk.END)
                     if entry_data_ini.get() == "AAAA-MM-DD" else None)
 
 lbl_filtro(barra, "ATÉ")
@@ -324,10 +435,9 @@ entry_data_fim = tk.Entry(barra, font=("Arial", 10), bd=1, relief="solid",
                            bg=BRANCO, fg="#1A1A1A", width=11)
 entry_data_fim.pack(side="left", ipady=4, padx=(0, 10))
 entry_data_fim.insert(0, "AAAA-MM-DD")
-entry_data_fim.bind("<FocusIn>",  lambda e: entry_data_fim.delete(0, tk.END)
+entry_data_fim.bind("<FocusIn>", lambda e: entry_data_fim.delete(0, tk.END)
                     if entry_data_fim.get() == "AAAA-MM-DD" else None)
 
-# Botões filtro
 def btn_style(parent, text, cmd, cor=AZUL):
     b = tk.Button(parent, text=text, command=cmd,
                   font=("Arial", 9, "bold"), bg=cor, fg=BRANCO,
@@ -336,10 +446,9 @@ def btn_style(parent, text, cmd, cor=AZUL):
     b.pack(side="left", padx=3)
     return b
 
-btn_style(barra, "Filtrar",  lambda: aplicar_filtros())
-btn_style(barra, "Limpar",   lambda: limpar_filtros(), CINZA)
+btn_style(barra, "Filtrar", lambda: aplicar_filtros())
+btn_style(barra, "Limpar",  lambda: limpar_filtros(), CINZA)
 
-# --- contador de resultados ---
 frame_info_tabela = tk.Frame(aba_tabela, bg=FUNDO, pady=4, padx=16)
 frame_info_tabela.pack(fill="x")
 
@@ -347,20 +456,17 @@ lbl_contagem = tk.Label(frame_info_tabela, text="",
                          font=("Arial", 8), fg=CINZA, bg=FUNDO)
 lbl_contagem.pack(side="left")
 
-# --- tabela ---
 COLUNAS = ("ID", "Crachá", "Funcionário", "Cód. Instrumento",
            "Instrumento", "Família", "Retirada", "Devolução", "Duração", "Status")
 
 style.configure("FT.Treeview",
     background=BRANCO, foreground="#1A1A1A",
-    rowheight=26, fieldbackground=BRANCO,
-    font=("Arial", 9))
+    rowheight=26, fieldbackground=BRANCO, font=("Arial", 9))
 style.configure("FT.Treeview.Heading",
     background=AZUL, foreground=BRANCO,
     font=("Arial", 9, "bold"), relief="flat", padding=5)
 style.map("FT.Treeview",
-    background=[("selected", AZUL_MED)],
-    foreground=[("selected", BRANCO)])
+    background=[("selected", AZUL_MED)], foreground=[("selected", BRANCO)])
 style.map("FT.Treeview.Heading",
     background=[("active", AZUL_ESC)])
 
@@ -375,8 +481,8 @@ larguras = {"ID": 40, "Crachá": 60, "Funcionário": 140, "Cód. Instrumento": 1
 
 for col in COLUNAS:
     tree.heading(col, text=col)
-    tree.column(col, width=larguras[col], minwidth=40, anchor="center"
-                if col in ("ID","Duração","Status") else "w")
+    tree.column(col, width=larguras[col], minwidth=40,
+                anchor="center" if col in ("ID","Duração","Status") else "w")
 
 tree.tag_configure("em_uso",    background=LARANJA_BG, foreground=LARANJA)
 tree.tag_configure("devolvido", background=VERDE_BG,   foreground=VERDE)
@@ -402,16 +508,8 @@ def carregar_tabela(filtros=None):
         tag = "em_uso" if status == "EM USO" else "devolvido"
 
         tree.insert("", tk.END, values=(
-            id_,
-            cracha,
-            nome_func,
-            cod_inst,
-            nome_inst,
-            familia or "—",
-            fmt_dt(data_s),
-            fmt_dt(data_d),
-            duracao,
-            status,
+            id_, cracha, nome_func, cod_inst, nome_inst,
+            familia or "—", fmt_dt(data_s), fmt_dt(data_d), duracao, status,
         ), tags=(tag,))
 
     lbl_contagem.config(text=f"{len(dados)} registro(s) encontrado(s)")
@@ -438,7 +536,6 @@ def limpar_filtros():
     entry_data_fim.insert(0, "AAAA-MM-DD")
     carregar_tabela()
 
-# busca em tempo real
 entry_busca.bind("<Return>", lambda e: aplicar_filtros())
 
 # ============================================================
@@ -462,25 +559,27 @@ style.configure("Status.Treeview.Heading",
     background=AZUL, foreground=BRANCO,
     font=("Arial", 9, "bold"), relief="flat", padding=5)
 style.map("Status.Treeview",
-    background=[("selected", AZUL_MED)],
-    foreground=[("selected", BRANCO)])
+    background=[("selected", AZUL_MED)], foreground=[("selected", BRANCO)])
 
 frame_tree_status = tk.Frame(aba_status, bg=FUNDO)
 frame_tree_status.pack(fill="both", expand=True, padx=16, pady=(0,10))
 
-COLS_STATUS = ("Cód.", "Nome", "Família", "Status", "Último Usuário", "Última Saída")
+COLS_STATUS = ("Cód.", "Nome", "Família", "Status", "Vencimento", "Situação Venc.", "Último Usuário", "Última Saída")
 tree_status = ttk.Treeview(frame_tree_status, columns=COLS_STATUS,
                             show="headings", style="Status.Treeview")
 
-largs_status = {"Cód.": 120, "Nome": 200, "Família": 160,
-                "Status": 100, "Último Usuário": 160, "Última Saída": 130}
+largs_status = {"Cód.": 110, "Nome": 180, "Família": 150,
+                "Status": 90, "Vencimento": 100, "Situação Venc.": 120,
+                "Último Usuário": 150, "Última Saída": 120}
 for col in COLS_STATUS:
     tree_status.heading(col, text=col)
     tree_status.column(col, width=largs_status[col], minwidth=60,
-                       anchor="center" if col in ("Status",) else "w")
+                       anchor="center" if col in ("Status", "Situação Venc.") else "w")
 
 tree_status.tag_configure("em_uso",    background=LARANJA_BG, foreground=LARANJA)
-tree_status.tag_configure("disponivel", background=VERDE_BG,  foreground=VERDE)
+tree_status.tag_configure("disponivel",background=VERDE_BG,   foreground=VERDE)
+tree_status.tag_configure("vencido",   background=VERM_BG,    foreground=VERM)
+tree_status.tag_configure("expirando", background=AMARELO_BG, foreground=AMARELO)
 
 sb_status = ttk.Scrollbar(frame_tree_status, orient="vertical", command=tree_status.yview)
 tree_status.configure(yscrollcommand=sb_status.set)
@@ -499,6 +598,7 @@ def carregar_status():
             i.nome,
             i.familia,
             i.status,
+            i.data_vencimento,
             COALESCE(m.nome_funcionario, f.nome, m.id_funcionario, '—') AS ultimo_usuario,
             m.data_saida
         FROM instrumentos i
@@ -515,22 +615,171 @@ def carregar_status():
     rows = c.fetchall()
     conn.close()
 
+    hoje = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+
     for r in rows:
-        cod, nome, fam, status, usuario, data_s = r
-        tag = "em_uso" if status == "EM USO" else "disponivel"
+        cod, nome, fam, status, venc_str, usuario, data_s = r
+
+        # Calcula situação do vencimento
+        situacao_venc = "—"
+        tag = "disponivel"
+
+        if venc_str:
+            try:
+                dt_venc = datetime.strptime(venc_str, "%d/%m/%Y")
+                delta = (dt_venc - hoje).days
+                if delta < 0:
+                    situacao_venc = f"Vencido há {abs(delta)}d"
+                    tag = "vencido"
+                elif delta <= 30:
+                    situacao_venc = f"Vence em {delta}d ⚠"
+                    tag = "expirando"
+                else:
+                    situacao_venc = f"Vence em {delta}d"
+            except ValueError:
+                situacao_venc = "Data inválida"
+
+        # Status tem prioridade sobre vencimento para a tag
+        if status == "EM USO":
+            tag = "em_uso"
+        elif status == "VENCIDO":
+            tag = "vencido"
+
         tree_status.insert("", tk.END, values=(
             cod, nome, fam or "—", status,
+            venc_str or "—", situacao_venc,
             usuario, fmt_dt(data_s)
         ), tags=(tag,))
 
 # ============================================================
-# ABA 3 — GRÁFICOS
+# ABA 3 — VENCIMENTOS   ← NOVA ABA
+# ============================================================
+
+aba_venc = tk.Frame(notebook, bg=FUNDO)
+notebook.add(aba_venc, text="  📅  Vencimentos  ")
+
+# --- barra de filtros de vencimento ---
+barra_venc = tk.Frame(aba_venc, bg=BRANCO, pady=10, padx=16)
+barra_venc.pack(fill="x")
+tk.Frame(barra_venc, bg=AZUL_MED, height=2).pack(fill="x", side="bottom")
+
+lbl_filtro(barra_venc, "SITUAÇÃO")
+combo_sit_venc = ttk.Combobox(barra_venc,
+    values=["TODOS", "VENCIDO", "Expirando em 30 dias", "Expirando em 60 dias"],
+    state="readonly", width=22, font=("Arial", 9))
+combo_sit_venc.set("TODOS")
+combo_sit_venc.pack(side="left", padx=(0, 8), ipady=3)
+
+lbl_filtro(barra_venc, "VENCE DE")
+entry_venc_ini = tk.Entry(barra_venc, font=("Arial", 10), bd=1, relief="solid",
+                           bg=BRANCO, fg="#1A1A1A", width=12)
+entry_venc_ini.pack(side="left", ipady=4, padx=(0, 4))
+entry_venc_ini.insert(0, "DD/MM/AAAA")
+entry_venc_ini.bind("<FocusIn>", lambda e: entry_venc_ini.delete(0, tk.END)
+                    if entry_venc_ini.get() == "DD/MM/AAAA" else None)
+
+lbl_filtro(barra_venc, "ATÉ")
+entry_venc_fim = tk.Entry(barra_venc, font=("Arial", 10), bd=1, relief="solid",
+                           bg=BRANCO, fg="#1A1A1A", width=12)
+entry_venc_fim.pack(side="left", ipady=4, padx=(0, 10))
+entry_venc_fim.insert(0, "DD/MM/AAAA")
+entry_venc_fim.bind("<FocusIn>", lambda e: entry_venc_fim.delete(0, tk.END)
+                    if entry_venc_fim.get() == "DD/MM/AAAA" else None)
+
+btn_style(barra_venc, "Filtrar", lambda: carregar_vencimentos())
+btn_style(barra_venc, "Limpar",  lambda: limpar_filtros_venc(), CINZA)
+
+# contador
+frame_info_venc = tk.Frame(aba_venc, bg=FUNDO, pady=4, padx=16)
+frame_info_venc.pack(fill="x")
+lbl_contagem_venc = tk.Label(frame_info_venc, text="",
+                              font=("Arial", 8), fg=CINZA, bg=FUNDO)
+lbl_contagem_venc.pack(side="left")
+
+# tabela de vencimentos
+style.configure("Venc.Treeview",
+    background=BRANCO, foreground="#1A1A1A",
+    rowheight=26, fieldbackground=BRANCO, font=("Arial", 9))
+style.configure("Venc.Treeview.Heading",
+    background=AZUL, foreground=BRANCO,
+    font=("Arial", 9, "bold"), relief="flat", padding=5)
+style.map("Venc.Treeview",
+    background=[("selected", AZUL_MED)], foreground=[("selected", BRANCO)])
+
+frame_tree_venc = tk.Frame(aba_venc, bg=FUNDO)
+frame_tree_venc.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+
+COLS_VENC = ("Código", "Nome", "Família", "Status", "Vencimento", "Situação")
+tree_venc = ttk.Treeview(frame_tree_venc, columns=COLS_VENC,
+                          show="headings", style="Venc.Treeview")
+
+largs_venc = {"Código": 120, "Nome": 220, "Família": 180,
+              "Status": 90, "Vencimento": 110, "Situação": 150}
+for col in COLS_VENC:
+    tree_venc.heading(col, text=col)
+    tree_venc.column(col, width=largs_venc[col], minwidth=60,
+                     anchor="center" if col in ("Status", "Situação") else "w")
+
+tree_venc.tag_configure("vencido",   background=VERM_BG,    foreground=VERM)
+tree_venc.tag_configure("expirando", background=AMARELO_BG, foreground=AMARELO)
+tree_venc.tag_configure("ok",        background=VERDE_BG,   foreground=VERDE)
+
+sb_venc_y = ttk.Scrollbar(frame_tree_venc, orient="vertical", command=tree_venc.yview)
+sb_venc_x = ttk.Scrollbar(frame_tree_venc, orient="horizontal", command=tree_venc.xview)
+tree_venc.configure(yscrollcommand=sb_venc_y.set, xscrollcommand=sb_venc_x.set)
+sb_venc_y.pack(side="right", fill="y")
+sb_venc_x.pack(side="bottom", fill="x")
+tree_venc.pack(fill="both", expand=True)
+
+def carregar_vencimentos():
+    for row in tree_venc.get_children():
+        tree_venc.delete(row)
+
+    sit = combo_sit_venc.get()
+    filtro_map = {
+        "VENCIDO":                "VENCIDO",
+        "Expirando em 30 dias":   "EXPIRANDO_30",
+        "Expirando em 60 dias":   "EXPIRANDO_60",
+        "TODOS":                  None,
+    }
+    filtro_venc = filtro_map.get(sit)
+
+    vi = entry_venc_ini.get().strip()
+    vf = entry_venc_fim.get().strip()
+    venc_ini = vi if vi not in ("", "DD/MM/AAAA") else None
+    venc_fim = vf if vf not in ("", "DD/MM/AAAA") else None
+
+    dados = query_instrumentos_vencimento(filtro_venc, venc_ini, venc_fim)
+
+    for cod, nome, familia, status, venc_str, delta, situacao in dados:
+        if delta < 0:
+            tag = "vencido"
+        elif delta <= 30:
+            tag = "expirando"
+        else:
+            tag = "ok"
+
+        tree_venc.insert("", tk.END, values=(
+            cod, nome, familia, status, venc_str, situacao
+        ), tags=(tag,))
+
+    lbl_contagem_venc.config(text=f"{len(dados)} instrumento(s) encontrado(s)")
+
+def limpar_filtros_venc():
+    combo_sit_venc.set("TODOS")
+    entry_venc_ini.delete(0, tk.END)
+    entry_venc_ini.insert(0, "DD/MM/AAAA")
+    entry_venc_fim.delete(0, tk.END)
+    entry_venc_fim.insert(0, "DD/MM/AAAA")
+    carregar_vencimentos()
+
+# ============================================================
+# ABA 4 — GRÁFICOS
 # ============================================================
 
 aba_graficos = tk.Frame(notebook, bg=FUNDO)
 notebook.add(aba_graficos, text="  📊  Gráficos  ")
 
-# Seletor de gráfico
 barra_graf = tk.Frame(aba_graficos, bg=BRANCO, pady=8, padx=16)
 barra_graf.pack(fill="x")
 tk.Frame(barra_graf, bg=AZUL_MED, height=2).pack(fill="x", side="bottom")
@@ -544,6 +793,7 @@ GRAFICOS = [
     "Top funcionários (retiradas)",
     "Top instrumentos (retiradas)",
     "Status atual (pizza)",
+    "Vencimentos por faixa",          # ← NOVO
 ]
 
 combo_grafico = ttk.Combobox(barra_graf, values=GRAFICOS,
@@ -553,7 +803,6 @@ combo_grafico.pack(side="left", padx=(0, 10), ipady=4)
 
 btn_style(barra_graf, "Gerar Gráfico", lambda: gerar_grafico())
 
-# Frame do canvas
 frame_canvas = tk.Frame(aba_graficos, bg=FUNDO)
 frame_canvas.pack(fill="both", expand=True, padx=16, pady=10)
 
@@ -659,9 +908,10 @@ def gerar_grafico():
             sizes  = list(dados.values())
             cores_pizza = []
             for l in labels:
-                if l == "EM USO":       cores_pizza.append("#FFB347")
-                elif l == "DISPONIVEL": cores_pizza.append("#6FCF97")
-                else:                   cores_pizza.append(CINZA)
+                if l == "EM USO":        cores_pizza.append("#FFB347")
+                elif l == "DISPONIVEL":  cores_pizza.append("#6FCF97")
+                elif l == "VENCIDO":     cores_pizza.append("#FF6B6B")
+                else:                    cores_pizza.append(CINZA)
 
             wedges, texts, autotexts = ax.pie(
                 sizes, labels=labels, colors=cores_pizza,
@@ -674,6 +924,43 @@ def gerar_grafico():
                 at.set_fontsize(9)
                 at.set_fontweight("bold")
             ax.set_title("Status Atual dos Instrumentos", fontsize=11, fontweight="bold", pad=12)
+
+    elif escolha == "Vencimentos por faixa":
+        # ── NOVO GRÁFICO ─────────────────────────────────────────────────
+        buckets = query_grafico_vencimento()
+        labels  = list(buckets.keys())
+        valores = [len(v) for v in buckets.values()]
+        cores_barras = ["#B71C1C", "#FF8C00", "#FFD700", "#2056A0", "#1A6E35"]
+
+        if sum(valores) == 0:
+            ax.text(0.5, 0.5, "Nenhum instrumento com data de vencimento cadastrada",
+                    ha="center", va="center", transform=ax.transAxes, color=CINZA, fontsize=11)
+        else:
+            bars = ax.bar(labels, valores, color=cores_barras, edgecolor=BRANCO, linewidth=0.8)
+            ax.set_title("Situação dos Vencimentos por Faixa", fontsize=11, fontweight="bold", pad=12)
+            ax.set_ylabel("Quantidade de instrumentos", fontsize=8)
+            ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+            for bar, val in zip(bars, valores):
+                if val > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
+                            str(val), ha="center", va="bottom", fontsize=9,
+                            color=AZUL, fontweight="bold")
+
+            # Lista os instrumentos vencidos e prestes a vencer abaixo do gráfico
+            vencidos   = buckets["Vencidos"]
+            expirando  = buckets["Até 30 dias"]
+            linhas = []
+            if vencidos:
+                linhas.append("Vencidos: " + ", ".join(vencidos[:6])
+                               + ("..." if len(vencidos) > 6 else ""))
+            if expirando:
+                linhas.append("Vencem em até 30 dias: " + ", ".join(expirando[:6])
+                               + ("..." if len(expirando) > 6 else ""))
+            if linhas:
+                fig.text(0.01, 0.01, "\n".join(linhas),
+                         fontsize=7, color=VERM, va="bottom",
+                         wrap=True)
+        # ────────────────────────────────────────────────────────────────
 
     fig.tight_layout(pad=2)
 
@@ -696,16 +983,26 @@ tk.Label(footer, text=f"CQ · {datetime.now().strftime('%d/%m/%Y  %H:%M')}",
 tk.Label(footer, text="Leitura em tempo real · controle_instrumentos.db",
          font=("Arial", 8), fg=CINZA, bg=AZUL_ESC).pack(side="left", padx=16, pady=6)
 
-# botão atualizar no footer
 def atualizar_tudo():
     carregar_tabela()
     carregar_status()
+    carregar_vencimentos()
+
     t, u, d, m, f = query_resumo()
     lbl_card_total.config(text=str(t))
     lbl_card_uso.config(text=str(u))
     lbl_card_disp.config(text=str(d))
     lbl_card_mov.config(text=str(m))
     lbl_card_func.config(text=str(f))
+
+    # Card de vencidos
+    conn = conectar()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM instrumentos WHERE status='VENCIDO'")
+    vencidos = c.fetchone()[0]
+    conn.close()
+    lbl_card_venc.config(text=str(vencidos))
+
     familias_lista[:] = ["TODAS"] + query_familias_disponiveis()
     combo_fam_filtro["values"] = familias_lista
 
