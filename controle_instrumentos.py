@@ -176,7 +176,7 @@ def pedir_quantidade_utilizacoes(nome_instr, codigo_instr):
     tk.Label(corpo_dlg, text=f"{nome_instr}  ({codigo_instr})",
              font=("Arial", 9), fg=CINZA, bg=FUNDO, anchor="w").pack(fill="x")
 
-    tk.Label(corpo_dlg, text="Quantas vezes este instrumento será utilizado?",
+    tk.Label(corpo_dlg, text="Quantas vezes o instrumento foi utilizado?",
              font=("Arial", 11), fg="#1A1A1A", bg=FUNDO,
              wraplength=360, justify="left").pack(anchor="w", pady=(10, 8))
 
@@ -339,32 +339,12 @@ def bipar_funcionario(event=None):
     # ================= RETIRADA =================
     if acao_atual == "RETIRANDO":
 
-        qtd_utilizacoes = None
-        eh_calibrador_rosca = (
-            familia_instrumento is not None
-            and familia_instrumento.strip().upper() == "CALIBRADOR TAMPAO ROSCA"
-        )
-
-        if eh_calibrador_rosca:
-            conn.close()
-            qtd_utilizacoes = pedir_quantidade_utilizacoes(nome_instrumento, instrumento_atual)
-            if qtd_utilizacoes is None:
-                limpar_campos()
-                return
-            conn = conectar()
-            c = conn.cursor()
-
-        linha_qtd = (
-            f"Utilizações previstas: {qtd_utilizacoes}\n"
-            if qtd_utilizacoes else ""
-        )
         confirmar = messagebox.askokcancel(
             "Confirmar Retirada",
             f"Funcionário: {nome_func}\n"
             f"Ação: RETIRANDO\n"
-            f"Instrumento: {nome_instrumento} ({instrumento_atual})\n"
-            f"{linha_qtd}"
-            "\nConfirma as informações?"
+            f"Instrumento: {nome_instrumento} ({instrumento_atual})\n\n"
+            "Confirma as informações?"
         )
 
         if not confirmar:
@@ -375,19 +355,17 @@ def bipar_funcionario(event=None):
         c.execute("""
             INSERT INTO movimentacoes
             (id_funcionario, nome_funcionario, id_instrumento, nome_instrumento,
-             data_saida, status, qtd_utilizacoes)
-            VALUES (?, ?, ?, ?, ?, 'EM USO', ?)
-        """, (cracha, nome_func, instrumento_atual, nome_instrumento, agora(), qtd_utilizacoes))
+             data_saida, status)
+            VALUES (?, ?, ?, ?, ?, 'EM USO')
+        """, (cracha, nome_func, instrumento_atual, nome_instrumento, agora()))
 
         c.execute("UPDATE instrumentos SET status='EM USO' WHERE id_instrumento=?",
                   (instrumento_atual,))
 
-        msg_qtd = f"\nUtilizações previstas: {qtd_utilizacoes}" if qtd_utilizacoes else ""
         set_status("success",
             f"✅  RETIRADA REGISTRADA\n\n"
             f"Funcionário: {nome_func}\n"
-            f"Instrumento: {nome_instrumento} ({instrumento_atual})"
-            f"{msg_qtd}\n"
+            f"Instrumento: {nome_instrumento} ({instrumento_atual})\n"
             f"Horário: {datetime.now().strftime('%d/%m/%Y  %H:%M:%S')}"
         )
 
@@ -403,12 +381,30 @@ def bipar_funcionario(event=None):
             limpar_campos()
             return
 
+        # Pergunta quantas vezes foi usado, se for Calibrador Tampão Rosca
+        qtd_utilizacoes = None
+        eh_calibrador_rosca = (
+            familia_instrumento is not None
+            and familia_instrumento.strip().upper() == "CALIBRADOR TAMPAO ROSCA"
+        )
+
+        if eh_calibrador_rosca:
+            conn.close()
+            qtd_utilizacoes = pedir_quantidade_utilizacoes(nome_instrumento, instrumento_atual)
+            if qtd_utilizacoes is None:
+                limpar_campos()
+                return
+            conn = conectar()
+            c = conn.cursor()
+
+        linha_qtd = f"Utilizações realizadas: {qtd_utilizacoes}\n" if qtd_utilizacoes else ""
         confirmar = messagebox.askokcancel(
             "Confirmar Devolução",
             f"Funcionário: {nome_func}\n"
             f"Ação: DEVOLVENDO\n"
-            f"Instrumento: {nome_instrumento} ({instrumento_atual})\n\n"
-            "Confirma as informações?"
+            f"Instrumento: {nome_instrumento} ({instrumento_atual})\n"
+            f"{linha_qtd}"
+            "\nConfirma as informações?"
         )
 
         if not confirmar:
@@ -426,9 +422,9 @@ def bipar_funcionario(event=None):
         if mov:
             c.execute("""
                 UPDATE movimentacoes
-                SET data_devolucao=?, status='DEVOLVIDO', devolvido_por=?
+                SET data_devolucao=?, status='DEVOLVIDO', devolvido_por=?, qtd_utilizacoes=?
                 WHERE id=?
-            """, (agora(), nome_func, mov[0]))
+            """, (agora(), nome_func, qtd_utilizacoes, mov[0]))
 
         # Após devolução, verifica se já está vencido para definir o status correto
         c.execute("SELECT data_vencimento FROM instrumentos WHERE id_instrumento=?",
@@ -444,10 +440,12 @@ def bipar_funcionario(event=None):
             "\n\n⚠  Instrumento devolvido como VENCIDO.\nAvise o líder do CQ."
             if novo_status == "VENCIDO" else ""
         )
+        msg_qtd_dev = f"\nUtilizações realizadas: {qtd_utilizacoes}" if qtd_utilizacoes else ""
         set_status("success",
             f"🔁  DEVOLUÇÃO REGISTRADA\n\n"
             f"Funcionário: {nome_func}\n"
-            f"Instrumento: {nome_instrumento} ({instrumento_atual})\n"
+            f"Instrumento: {nome_instrumento} ({instrumento_atual})"
+            f"{msg_qtd_dev}\n"
             f"Horário: {datetime.now().strftime('%d/%m/%Y  %H:%M:%S')}"
             f"{aviso_venc}"
         )
