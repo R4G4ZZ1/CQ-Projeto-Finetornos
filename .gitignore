@@ -1,0 +1,8 @@
+﻿*.db
+Thumbs.db
+qrcodes_finetornos/
+Sistema/Sistema_Almoxarifado/
+__pycache__/
+dist/
+build/
+*.exe
